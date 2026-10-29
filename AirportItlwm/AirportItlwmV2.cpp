@@ -701,8 +701,15 @@ IOReturn AirportItlwm::outputStart(IONetworkInterface *interface, IOOptionBits o
         (*ifp->if_start)(ifp);
     const uint32_t capacity = ifp->if_snd.queue->getCapacity();
     const uint32_t queued = ifq_len(&ifp->if_snd);
-    if (ifq_is_oactive(&ifp->if_snd) || queued >= capacity)
+    // Only stall the output thread when the TX ring is full: iwm_clear_oactive()
+    // will signal it once the hardware completes frames. A full if_snd with an
+    // idle ring (e.g. data held back by IEEE80211_F_TX_MGMT_ONLY during a
+    // background scan) has no such wakeup, so kIOReturnNoResources would stall
+    // transmit permanently while the link still reports connected.
+    if (ifq_is_oactive(&ifp->if_snd))
         return kIOReturnNoResources;
+    if (queued >= capacity)
+        return kIOReturnSuccess;
     const uint32_t count = MIN(32U, capacity - queued);
     if (interface->dequeueOutputPackets(count, &m) != kIOReturnSuccess || !m)
         return kIOReturnSuccess;
